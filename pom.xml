@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>demo</groupId>
+    <artifactId>sb3-k8s-hot-reload-parent</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.0</version>
+        <relativePath/>
+    </parent>
+
+    <modules>
+        <module>gateway</module>
+        <module>order-service</module>
+        <module>pricing-service</module>
+    </modules>
+
+    <properties>
+        <java.version>25</java.version>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
+        <spring-cloud.version>2025.0.0</spring-cloud.version>
+        <openfeature.sdk.version>1.20.2</openfeature.sdk.version>
+        <openfeature.flagd.version>0.13.0</openfeature.flagd.version>
+        <jib.version>3.4.4</jib.version>
+        <jib.image.registry>local</jib.image.registry>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>dev.openfeature</groupId>
+                <artifactId>sdk</artifactId>
+                <version>${openfeature.sdk.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dev.openfeature.contrib.providers</groupId>
+                <artifactId>flagd</artifactId>
+                <version>${openfeature.flagd.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <!--
+        Container images are built with the shared root Dockerfile (docker build),
+        not jib, because jib-maven-plugin 3.4.4 bundles an ASM that does not
+        recognise Java 25 class files. See scripts/build.sh.
+    -->
+</project>

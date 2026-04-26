@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flagd
+  labels:
+    app: flagd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flagd
+  template:
+    metadata:
+      labels:
+        app: flagd
+    spec:
+      containers:
+        - name: flagd
+          image: ghcr.io/open-feature/flagd:v0.15.4
+          args:
+            - "start"
+            - "--uri"
+            - "file:/etc/flagd/flags.json"
+            - "--port"
+            - "8013"
+            - "--management-port"
+            - "8014"
+            - "--ofrep-port"
+            - "8016"
+          ports:
+            - name: grpc
+              containerPort: 8013
+            - name: management
+              containerPort: 8014
+            - name: ofrep
+              containerPort: 8016
+          volumeMounts:
+            - name: config
+              mountPath: /etc/flagd
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8014
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8014
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: flagd-config

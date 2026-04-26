@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: order-service
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: 8081
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      show-details: always
+
+# %X{ff.tier} / %X{ff.newPricing} are populated by FeatureFlagFilter via MDC,
+# so any log line emitted during a request carries the flag context for free.
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [tier=%X{ff.tier:-?},np=%X{ff.newPricing:-?}] %logger{36} - %msg%n"

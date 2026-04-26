@@ -1,0 +1,3 @@
+# Build context only needs target/*.jar (referenced by ../Dockerfile)
+**
+!target/*.jar

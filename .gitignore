@@ -1,0 +1,59 @@
+# ── Java / Maven ─────────────────────────────────────────────
+target/
+*.jar.original
+.mvn/wrapper/maven-wrapper.jar
+build/
+out/
+dependency-reduced-pom.xml
+HELP.md
+
+# Spring Boot
+*.log
+*.log.*
+spring-shell.log
+.spring-boot-devtools.properties
+
+# ── Node / Vite / React (ui/) ────────────────────────────────
+node_modules/
+ui/dist/
+ui/.vite/
+ui/coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Env / secrets ────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+kubeconfig
+.kube/
+
+# ── IDE ──────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+!.vscode/settings.json.example
+.project
+.classpath
+.settings/
+*.swp
+*.swo
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Claude Code (local-only config) ──────────────────────────
+.claude/settings.local.json
+.claude/.credentials.json
+
+# ── Local scratch ────────────────────────────────────────────
+/tmp/
+*.bak
+*.orig

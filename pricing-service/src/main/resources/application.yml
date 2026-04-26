@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: pricing-service
+  threads:
+    virtual:
+      enabled: true
+  config:
+    # Mounts ConfigMap as a volume → Spring reads each file as a property.
+    # File "pricing.discount-percent" → property "pricing.discount-percent" → bound to PricingConfig.discountPercent.
+    import: optional:configtree:/etc/pricing-config/
+
+server:
+  port: 8082
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 'refresh' is contributed by spring-cloud-context.
+        # Triggers re-read of property sources + EnvironmentChangeEvent + @ConfigurationProperties rebind.
+        include: health, info, refresh, configprops, env
+  endpoint:
+    health:
+      show-details: always
+
+# %X{ff.tier} / %X{ff.newPricing} populated by FeatureFlagFilter via MDC.
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [tier=%X{ff.tier:-?},np=%X{ff.newPricing:-?}] %logger{36} - %msg%n"

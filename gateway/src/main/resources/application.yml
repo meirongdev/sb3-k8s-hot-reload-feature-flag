@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: gateway
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: 8080
+  shutdown: graceful
+
+flagd:
+  host: ${FLAGD_HOST:flagd}
+  port: ${FLAGD_PORT:8013}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, gateway
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    demo: DEBUG
+    org.springframework.cloud.gateway: INFO

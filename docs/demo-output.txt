@@ -1,0 +1,270 @@
+
+── Step 1 — kind cluster ──
+cluster 'sb3-demo' already exists, reusing
+$ kubectl --context kind-sb3-demo get nodes
+NAME                     STATUS   ROLES           AGE     VERSION
+sb3-demo-control-plane   Ready    control-plane   7m16s   v1.35.0
+sb3-demo-worker          Ready    <none>          7m7s    v1.35.0
+✓ cluster ready
+
+── Step 2 — build images and load into kind ──
+$ mvn -q -DskipTests package
+$ docker build --quiet -t local/gateway:0.0.1-SNAPSHOT -f Dockerfile gateway/
+sha256:e8297e1886f9b8cd134625b848a4ab441eb32bbb261624272f4d1f760c9f80e0
+$ kind load docker-image local/gateway:0.0.1-SNAPSHOT --name sb3-demo
+Image: "local/gateway:0.0.1-SNAPSHOT" with ID "sha256:e8297e1886f9b8cd134625b848a4ab441eb32bbb261624272f4d1f760c9f80e0" found to be already present on all nodes.
+$ docker build --quiet -t local/order-service:0.0.1-SNAPSHOT -f Dockerfile order-service/
+sha256:8a61fad1fb8fa3dddf157e5a4ebf1b81333f655874112feff821c49e337ce54f
+$ kind load docker-image local/order-service:0.0.1-SNAPSHOT --name sb3-demo
+Image: "local/order-service:0.0.1-SNAPSHOT" with ID "sha256:8a61fad1fb8fa3dddf157e5a4ebf1b81333f655874112feff821c49e337ce54f" found to be already present on all nodes.
+$ docker build --quiet -t local/pricing-service:0.0.1-SNAPSHOT -f Dockerfile pricing-service/
+sha256:8e170f223e40487da9c8b15dd01b7d76345ef1c2c2eb5d0186c4dfaa5770eaf0
+$ kind load docker-image local/pricing-service:0.0.1-SNAPSHOT --name sb3-demo
+Image: "local/pricing-service:0.0.1-SNAPSHOT" with ID "sha256:8e170f223e40487da9c8b15dd01b7d76345ef1c2c2eb5d0186c4dfaa5770eaf0" found to be already present on all nodes.
+$ docker build --quiet -t local/ui:0.0.1-SNAPSHOT -f ui/Dockerfile ui/
+sha256:8f501496dabb491e7233a565bba92d314137d17bb801875dc2fb5f913a7a3148
+$ kind load docker-image local/ui:0.0.1-SNAPSHOT --name sb3-demo
+Image: "local/ui:0.0.1-SNAPSHOT" with ID "sha256:8f501496dabb491e7233a565bba92d314137d17bb801875dc2fb5f913a7a3148" found to be already present on all nodes.
+✓ images built and loaded
+
+── Step 3 — deploy flagd + microservices + gateway + ui ──
+$ kubectl apply -f k8s/flagd/
+configmap/flagd-config unchanged
+deployment.apps/flagd unchanged
+service/flagd unchanged
+deployment.apps/flagd condition met
+$ kubectl apply -f k8s/order-service/ -f k8s/pricing-service/ -f k8s/gateway/ -f k8s/ui/
+deployment.apps/order-service unchanged
+service/order-service unchanged
+configmap/pricing-config unchanged
+deployment.apps/pricing-service unchanged
+service/pricing-service unchanged
+deployment.apps/gateway unchanged
+service/gateway unchanged
+deployment.apps/ui unchanged
+service/ui unchanged
+deployment.apps/order-service condition met
+deployment.apps/pricing-service condition met
+deployment.apps/gateway condition met
+deployment.apps/ui condition met
+$ kubectl get pods -o wide
+NAME                               READY   STATUS    RESTARTS   AGE     IP           NODE              NOMINATED NODE   READINESS GATES
+flagd-b779b6f-dgxrq                1/1     Running   0          6m22s   10.244.1.2   sb3-demo-worker   <none>           <none>
+gateway-76598d7dbd-j7mdb           1/1     Running   0          5m23s   10.244.1.4   sb3-demo-worker   <none>           <none>
+order-service-5b7b8946d6-zzhc7     1/1     Running   0          5m23s   10.244.1.5   sb3-demo-worker   <none>           <none>
+pricing-service-75c97d4b69-9bmmh   1/1     Running   0          5m23s   10.244.1.3   sb3-demo-worker   <none>           <none>
+ui-75967b8c74-pn7h8                1/1     Running   0          5m23s   10.244.1.6   sb3-demo-worker   <none>           <none>
+✓ all deployments ready
+
+── Step 4 — feature flag scenarios ──
+waiting for gateway readiness on http://localhost:31080/actuator/health
+warming up downstream services through the gateway
+
+  4.1 Anonymous → defaults (tier=standard, newPricing=false)
+  $ curl -s http://localhost:31080/orders/o-100
+{
+  "thread": "VirtualThread[#125,tomcat-handler-73]/runnable@ForkJoinPool-1-worker-1",
+  "userId": "anonymous",
+  "newPricingHint": false,
+  "tier": "standard",
+  "orderId": "o-100",
+  "handler": "standard-order-pipeline",
+  "service": "order-service"
+}
+
+  4.2 Normal user → defaults
+  $ curl -s -H 'X-User-Id: u-normal-001' http://localhost:31080/orders/o-101
+{
+  "thread": "VirtualThread[#126,tomcat-handler-74]/runnable@ForkJoinPool-1-worker-1",
+  "userId": "u-normal-001",
+  "newPricingHint": false,
+  "tier": "standard",
+  "orderId": "o-101",
+  "handler": "standard-order-pipeline",
+  "service": "order-service"
+}
+
+  4.3 VIP user → targeting hits, tier=premium
+  $ curl -s -H 'X-User-Id: u-vip-001' http://localhost:31080/orders/o-102
+{
+  "thread": "VirtualThread[#127,tomcat-handler-75]/runnable@ForkJoinPool-1-worker-1",
+  "userId": "u-vip-001",
+  "newPricingHint": false,
+  "tier": "premium",
+  "orderId": "o-102",
+  "handler": "premium-order-pipeline",
+  "service": "order-service"
+}
+
+  4.4 Pricing call without premium tenant → algorithm=v1-flat
+  $ curl -s http://localhost:31080/pricing/sku-A
+{
+  "service": "pricing-service",
+  "thread": "VirtualThread[#144,tomcat-handler-87]/runnable@ForkJoinPool-1-worker-2",
+  "sku": "sku-A",
+  "algorithm": "v1-flat",
+  "tier": "standard",
+  "price": 90.25,
+  "currency": "USD",
+  "discountPercent": 5
+}
+
+  4.5 Pricing call with X-Tenant-Id: premium → algorithm=v2-segmented
+  $ curl -s -H 'X-Tenant-Id: premium' http://localhost:31080/pricing/sku-A
+{
+  "service": "pricing-service",
+  "thread": "VirtualThread[#145,tomcat-handler-88]/runnable@ForkJoinPool-1-worker-2",
+  "sku": "sku-A",
+  "algorithm": "v2-segmented",
+  "tier": "standard",
+  "price": 90.25,
+  "currency": "USD",
+  "discountPercent": 5
+}
+
+  4.6 VIP user + premium tenant on pricing → tier=premium AND v2-segmented
+  $ curl -s -H 'X-User-Id: u-vip-001' -H 'X-Tenant-Id: premium' http://localhost:31080/pricing/sku-B
+{
+  "service": "pricing-service",
+  "thread": "VirtualThread[#146,tomcat-handler-89]/runnable@ForkJoinPool-1-worker-2",
+  "sku": "sku-B",
+  "algorithm": "v2-segmented",
+  "tier": "premium",
+  "price": 80.75,
+  "currency": "USD",
+  "discountPercent": 5
+}
+✓ scenarios passed
+
+── Step 5 — hot reload via ConfigMap edit (no service restart) ──
+Before: defaultVariant of new-pricing-algo = off
+
+  anonymous /pricing/sku-X (newPricing=false)
+  $ curl -s http://localhost:31080/pricing/sku-X
+{
+  "service": "pricing-service",
+  "thread": "VirtualThread[#147,tomcat-handler-90]/runnable@ForkJoinPool-1-worker-2",
+  "sku": "sku-X",
+  "algorithm": "v1-flat",
+  "tier": "standard",
+  "price": 90.25,
+  "currency": "USD",
+  "discountPercent": 5
+}
+patching ConfigMap: flip new-pricing-algo defaultVariant off → on
+$ kubectl get configmap flagd-config -o jsonpath='{.data.flags\.json}' | jq '.flags["new-pricing-algo"].defaultVariant'
+"off"
+configmap/flagd-config configured
+waiting up to 30s for kubelet to sync ConfigMap and flagd to pick it up...
+✓ flag picked up after ~12s
+After:
+
+  anonymous /pricing/sku-X (now newPricing=true, no restart)
+  $ curl -s http://localhost:31080/pricing/sku-X
+{
+  "service": "pricing-service",
+  "thread": "VirtualThread[#156,tomcat-handler-99]/runnable@ForkJoinPool-1-worker-2",
+  "sku": "sku-X",
+  "algorithm": "v2-segmented",
+  "tier": "standard",
+  "price": 90.25,
+  "currency": "USD",
+  "discountPercent": 5
+}
+resetting ConfigMap to original (default off) so the next run starts clean
+✓ hot-reload demonstrated (state reset for next run)
+
+── Step 6 — application config hot-reload via @ConfigurationProperties (no pod restart) ──
+Before: pricing.discount-percent = 5, pricing.currency = USD
+
+  GET /pricing/sku-A → discountPercent=5, currency=USD
+  $ curl -s http://localhost:31080/pricing/sku-A
+{
+  "service": "pricing-service",
+  "thread": "VirtualThread[#166,tomcat-handler-109]/runnable@ForkJoinPool-1-worker-2",
+  "sku": "sku-A",
+  "algorithm": "v1-flat",
+  "tier": "standard",
+  "price": 90.25,
+  "currency": "USD",
+  "discountPercent": 5
+}
+patching ConfigMap pricing-config: discount-percent 5 → 25, currency USD → CNY
+$ kubectl patch configmap pricing-config --type merge -p '{"data":{"pricing.discount-percent":"25","pricing.currency":"CNY"}}'
+configmap/pricing-config patched
+kubelet syncs ConfigMap volume (~5–10s); then we trigger /actuator/refresh
+(production: spring-cloud-kubernetes-configuration-watcher does this automatically)
+✓ config rebound after ~4s
+After: same pod, no restart
+
+  GET /pricing/sku-A → discountPercent=25, currency=CNY
+  $ curl -s http://localhost:31080/pricing/sku-A
+{
+  "service": "pricing-service",
+  "thread": "VirtualThread[#175,tomcat-handler-116]/runnable@ForkJoinPool-1-worker-2",
+  "sku": "sku-A",
+  "algorithm": "v1-flat",
+  "tier": "standard",
+  "price": 71.25,
+  "currency": "CNY",
+  "discountPercent": 25
+}
+$ kubectl get pods --no-headers -l app=pricing-service
+pricing-service-75c97d4b69-9bmmh   1/1   Running   0     5m57s
+resetting pricing-config to defaults
+✓ application config hot-reload demonstrated (state reset for next run)
+
+── Step 7 — React UI + OpenFeature Remote Evaluation Protocol ──
+verifying UI shell is reachable on http://localhost:31180
+UI HTML shell:
+$ curl -s http://localhost:31180/ | head -10
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SB3 Demo UI</title>
+    <script type="module" crossorigin src="/assets/index-cpi-MtuE.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+OFREP proxy through nginx (browser does the same call):
+$ curl -s -X POST http://localhost:31180/ofrep/v1/evaluate/flags/order-tier         -H 'Content-Type: application/json'         -d '{"context": {"targetingKey": "u-vip-001"}}' | jq
+{
+  "value": "premium",
+  "key": "order-tier",
+  "reason": "TARGETING_MATCH",
+  "variant": "premium",
+  "metadata": {}
+}
+$ curl -s -X POST http://localhost:31180/ofrep/v1/evaluate/flags/order-tier         -H 'Content-Type: application/json'         -d '{"context": {"targetingKey": "u-normal-001"}}' | jq
+{
+  "value": "standard",
+  "key": "order-tier",
+  "reason": "DEFAULT",
+  "variant": "standard",
+  "metadata": {}
+}
+Same flag, evaluated server-side via gateway (REST), should match:
+
+  VIP user via gateway → tier=premium
+  $ curl -s -H 'X-User-Id: u-vip-001' http://localhost:31080/orders/o-7
+{
+  "thread": "VirtualThread[#138,tomcat-handler-86]/runnable@ForkJoinPool-1-worker-1",
+  "userId": "u-vip-001",
+  "newPricingHint": false,
+  "tier": "premium",
+  "orderId": "o-7",
+  "handler": "premium-order-pipeline",
+  "service": "order-service"
+}
+✓ UI served + OFREP works + same-flag-different-stack consistency proven
+
+  Open http://localhost:31180 in a browser:
+    - switch user → flags re-evaluate live
+    - 'Place order' / 'Get price' buttons hit the gateway through same-origin /api/*
+    - 'New Pricing!' / 'VIP' badges flip without page reload
+
+── Done ──
+Cluster name: sb3-demo
+Tear down:    kind delete cluster --name sb3-demo

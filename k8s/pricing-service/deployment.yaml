@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pricing-service
+  labels:
+    app: pricing-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pricing-service
+  template:
+    metadata:
+      labels:
+        app: pricing-service
+    spec:
+      containers:
+        - name: pricing-service
+          image: local/pricing-service:0.0.1-SNAPSHOT
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8082
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8082
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: pricing-config
+              mountPath: /etc/pricing-config
+              readOnly: true
+      volumes:
+        - name: pricing-config
+          configMap:
+            name: pricing-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pricing-service
+spec:
+  selector:
+    app: pricing-service
+  ports:
+    - port: 8082
+      targetPort: 8082

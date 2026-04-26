@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pricing-config
+data:
+  # Each key becomes a property via Spring Boot's configtree property source
+  # (mounted at /etc/pricing-config/ in the pricing-service container).
+  pricing.discount-percent: "5"
+  pricing.currency: "USD"

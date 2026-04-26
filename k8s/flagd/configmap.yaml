@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flagd-config
+data:
+  flags.json: |
+    {
+      "$schema": "https://flagd.dev/schema/v0/flags.json",
+      "flags": {
+        "new-pricing-algo": {
+          "state": "ENABLED",
+          "variants": {
+            "on": true,
+            "off": false
+          },
+          "defaultVariant": "off",
+          "targeting": {
+            "if": [
+              { "==": [{ "var": "tenant" }, "premium"] },
+              "on",
+              null
+            ]
+          }
+        },
+        "order-tier": {
+          "state": "ENABLED",
+          "variants": {
+            "standard": "standard",
+            "premium": "premium"
+          },
+          "defaultVariant": "standard",
+          "targeting": {
+            "if": [
+              { "starts_with": [{ "var": "targetingKey" }, "u-vip-"] },
+              "premium",
+              null
+            ]
+          }
+        }
+      }
+    }

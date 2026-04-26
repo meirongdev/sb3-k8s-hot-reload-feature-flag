@@ -1,0 +1,18 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: sb3-demo
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: KubeletConfiguration
+        configMapAndSecretChangeDetectionStrategy: Watch
+        syncFrequency: 10s
+    extraPortMappings:
+      - containerPort: 30080      # gateway NodePort
+        hostPort: 31080            # host port (30080 is used by OrbStack on this host)
+        protocol: TCP
+      - containerPort: 30180      # ui (nginx) NodePort
+        hostPort: 31180
+        protocol: TCP
+  - role: worker

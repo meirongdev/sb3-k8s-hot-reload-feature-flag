@@ -1,0 +1,52 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Java — Spring/Google style
+[*.java]
+indent_size = 4
+max_line_length = 120
+
+# Maven POMs
+[pom.xml]
+indent_size = 4
+
+# YAML (K8s manifests, application.yml) — must be spaces, never tabs
+[*.{yml,yaml}]
+indent_size = 2
+
+# JSON (flagd flags.json, package.json, tsconfig.json)
+[*.json]
+indent_size = 2
+
+# TypeScript / React
+[*.{ts,tsx,js,jsx,mjs,cjs}]
+indent_size = 2
+
+# Shell scripts
+[*.sh]
+indent_size = 2
+
+# Dockerfile
+[{Dockerfile,Dockerfile.*}]
+indent_size = 2
+
+# Markdown — preserve trailing whitespace (two spaces = hard line break)
+[*.md]
+trim_trailing_whitespace = false
+indent_size = 2
+
+# Java .properties files — don't normalise trailing whitespace
+[*.properties]
+trim_trailing_whitespace = false
+indent_size = 2
+
+# Makefiles require literal tabs
+[Makefile]
+indent_style = tab
