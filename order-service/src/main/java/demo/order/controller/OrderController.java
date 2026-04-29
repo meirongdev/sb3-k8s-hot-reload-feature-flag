@@ -33,7 +33,8 @@ public class OrderController {
                 "userId", userId == null ? "anonymous" : userId,
                 "handler", handler,
                 "tier", ff.orderTier(),
-                "newPricingHint", ff.newPricing()
+                "newPricingHint", ff.newPricing(),
+                "fulfillmentMode", ff.fulfillmentMode()
         );
     }
 }

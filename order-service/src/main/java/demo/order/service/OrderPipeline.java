@@ -20,9 +20,11 @@ public class OrderPipeline {
         // so the log line below shows them automatically.
         FeatureFlags ff = FeatureFlags.current();
         log.info("picking handler for order={}", orderId);
+        if ("express".equals(ff.fulfillmentMode())) {
+            return "express-order-pipeline";
+        }
         return switch (ff.orderTier()) {
             case "premium" -> "premium-order-pipeline";
-            case "express" -> "express-order-pipeline";
             default -> "standard-order-pipeline";
         };
     }

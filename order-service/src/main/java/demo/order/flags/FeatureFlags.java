@@ -15,9 +15,9 @@ package demo.order.flags;
  *
  * Finalised in Java 25 (JEP 506). No --enable-preview needed.
  */
-public record FeatureFlags(String orderTier, boolean newPricing) {
+public record FeatureFlags(String orderTier, boolean newPricing, String fulfillmentMode) {
 
-    public static final FeatureFlags DEFAULTS = new FeatureFlags("standard", false);
+    public static final FeatureFlags DEFAULTS = new FeatureFlags("standard", false, "standard");
 
     public static final ScopedValue<FeatureFlags> CURRENT = ScopedValue.newInstance();
 

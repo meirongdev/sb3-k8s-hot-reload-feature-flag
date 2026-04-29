@@ -26,6 +26,7 @@ public class FeatureFlagFilter extends OncePerRequestFilter {
 
     static final String H_TIER = "X-FF-Order-Tier";
     static final String H_NEW_PRICING = "X-FF-New-Pricing";
+    static final String H_FULFILLMENT_MODE = "X-FF-Fulfillment-Mode";
 
     static final String MDC_TIER = "ff.tier";
     static final String MDC_NEW_PRICING = "ff.newPricing";
@@ -57,8 +58,10 @@ public class FeatureFlagFilter extends OncePerRequestFilter {
     private static FeatureFlags parse(HttpServletRequest req) {
         String tier = req.getHeader(H_TIER);
         String np = req.getHeader(H_NEW_PRICING);
+        String fulfillmentMode = req.getHeader(H_FULFILLMENT_MODE);
         return new FeatureFlags(
                 tier != null ? tier : FeatureFlags.DEFAULTS.orderTier(),
-                "true".equalsIgnoreCase(np));
+                "true".equalsIgnoreCase(np),
+                fulfillmentMode != null ? fulfillmentMode : FeatureFlags.DEFAULTS.fulfillmentMode());
     }
 }

@@ -6,10 +6,25 @@ data:
   flags.json: |
     {
       "$schema": "https://flagd.dev/schema/v0/flags.json",
-      "flags": {
-        "new-pricing-algo": {
-          "state": "ENABLED",
-          "variants": {
+        "flags": {
+          "ops-fulfillment-mode": {
+            "state": "ENABLED",
+            "variants": {
+              "standard": "standard",
+              "express": "express"
+            },
+            "defaultVariant": "standard",
+            "targeting": {
+              "if": [
+                { "==": [{ "var": "tenant" }, "premium"] },
+                "express",
+                null
+              ]
+            }
+          },
+          "new-pricing-algo": {
+            "state": "ENABLED",
+            "variants": {
             "on": true,
             "off": false
           },
@@ -33,6 +48,36 @@ data:
             "if": [
               { "starts_with": [{ "var": "targetingKey" }, "u-vip-"] },
               "premium",
+              null
+            ]
+          }
+        },
+        "ui-homepage-banner": {
+          "state": "ENABLED",
+          "variants": {
+            "control": "control",
+            "spring-sale": "spring-sale"
+          },
+          "defaultVariant": "control",
+          "targeting": {
+            "if": [
+              { "starts_with": [{ "var": "targetingKey" }, "u-vip-"] },
+              "spring-sale",
+              null
+            ]
+          }
+        },
+        "ui-member-perks": {
+          "state": "ENABLED",
+          "variants": {
+            "on": true,
+            "off": false
+          },
+          "defaultVariant": "off",
+          "targeting": {
+            "if": [
+              { "starts_with": [{ "var": "targetingKey" }, "u-vip-"] },
+              "on",
               null
             ]
           }

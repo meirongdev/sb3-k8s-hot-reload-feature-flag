@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-#
-# End-to-end automated demo:
-#   1. Create kind cluster
-#   2. Build images (mvn + jib) and load into kind
-#   3. Deploy flagd, MS, gateway
-#   4. Exercise feature flag scenarios via the gateway
-#   5. Hot-reload demo: edit ConfigMap and re-exercise
-#
-# Idempotent: re-running reuses an existing cluster and re-deploys.
 
 set -euo pipefail
 
@@ -23,16 +14,37 @@ bold()    { printf '\033[1m%s\033[0m\n' "$*"; }
 section() { printf '\n\033[1;36m── %s ──\033[0m\n' "$*"; }
 note()    { printf '\033[2m%s\033[0m\n' "$*"; }
 ok()      { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
-
 show()    { printf '\033[1;33m$\033[0m %s\n' "$*"; eval "$@"; }
+
+assert_eq() {
+  local actual="$1" expected="$2" message="$3"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "ASSERT FAIL: ${message} (expected=${expected}, actual=${actual})"
+    exit 1
+  fi
+}
+
+assert_non_empty() {
+  local actual="$1" message="$2"
+  if [[ -z "$actual" ]]; then
+    echo "ASSERT FAIL: ${message}"
+    exit 1
+  fi
+}
+
+print_json() {
+  local title="$1" body="$2"
+  bold "${title}"
+  echo "$body" | jq '.'
+}
 
 step1_cluster() {
   section "Step 1 — kind cluster"
   if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-    note "cluster '${CLUSTER_NAME}' already exists, reusing"
-  else
-    show "kind create cluster --config k8s/kind-cluster.yaml"
+    note "recreating cluster '${CLUSTER_NAME}' for a clean POC run"
+    show "kind delete cluster --name ${CLUSTER_NAME}"
   fi
+  show "kind create cluster --config k8s/kind-cluster.yaml"
   show "kubectl --context kind-${CLUSTER_NAME} get nodes"
   ok "cluster ready"
 }
@@ -50,13 +62,12 @@ step2_build() {
 }
 
 step3_deploy() {
-  section "Step 3 — deploy flagd + microservices + gateway + ui"
+  section "Step 3 — deploy all components"
   show "kubectl apply -f k8s/flagd/"
-  kubectl wait --for=condition=available --timeout=90s deployment/flagd
-  # pricing-config ConfigMap mounted into pricing-service — applied as part of the same dir.
+  kubectl wait --for=condition=available --timeout=90s deployment/flagd >/dev/null
   show "kubectl apply -f k8s/order-service/ -f k8s/pricing-service/ -f k8s/gateway/ -f k8s/ui/"
   kubectl wait --for=condition=available --timeout=180s \
-    deployment/order-service deployment/pricing-service deployment/gateway deployment/ui
+    deployment/order-service deployment/pricing-service deployment/gateway deployment/ui >/dev/null
   show "kubectl get pods -o wide"
   ok "all deployments ready"
 }
@@ -64,182 +75,206 @@ step3_deploy() {
 wait_gateway() {
   note "waiting for gateway readiness on ${GW_URL}/actuator/health"
   for _ in $(seq 1 30); do
-    if curl -fsS "${GW_URL}/actuator/health" >/dev/null 2>&1; then break; fi
+    if curl -fsS "${GW_URL}/actuator/health" >/dev/null 2>&1; then
+      return 0
+    fi
     sleep 2
   done
+  echo "gateway did not become ready"
+  exit 1
+}
 
-  note "warming up downstream services through the gateway"
-  for _ in $(seq 1 15); do
-    o=$(curl -s -o /dev/null -w "%{http_code}" "${GW_URL}/orders/warmup")
-    p=$(curl -s -o /dev/null -w "%{http_code}" "${GW_URL}/pricing/warmup")
-    if [[ "$o" == "200" && "$p" == "200" ]]; then return 0; fi
+wait_ui() {
+  note "waiting for UI readiness on ${UI_URL}/"
+  for _ in $(seq 1 30); do
+    if curl -fsS "${UI_URL}/" >/dev/null 2>&1; then
+      return 0
+    fi
     sleep 2
   done
-  echo "downstream not ready (orders=$o pricing=$p)"; exit 1
+  echo "UI did not become ready"
+  exit 1
 }
 
-call() {
-  local desc="$1"; shift
-  printf '\n\033[1m  %s\033[0m\n' "${desc}"
-  printf '  \033[1;33m$\033[0m %s\n' "$*"
-  eval "$@" | jq '.' || true
+curl_json() {
+  curl -fsS "$@"
 }
 
-step4_scenarios() {
-  section "Step 4 — feature flag scenarios"
+curl_ofrep() {
+  local flag="$1" context_json="$2"
+  curl -fsS -X POST "${UI_URL}/ofrep/v1/evaluate/flags/${flag}" \
+    -H 'Content-Type: application/json' \
+    -d "${context_json}"
+}
+
+step4_backend_only() {
+  section "Step 4 — backend-only flag flow"
   wait_gateway
 
-  call "4.1 Anonymous → defaults (tier=standard, newPricing=false)" \
-    "curl -s ${GW_URL}/orders/o-100"
+  local backend_only
+  backend_only=$(curl_json -H 'X-Tenant-Id: premium' "${GW_URL}/orders/o-201")
+  print_json "premium tenant order response" "$backend_only"
 
-  call "4.2 Normal user → defaults" \
-    "curl -s -H 'X-User-Id: u-normal-001' ${GW_URL}/orders/o-101"
-
-  call "4.3 VIP user → targeting hits, tier=premium" \
-    "curl -s -H 'X-User-Id: u-vip-001' ${GW_URL}/orders/o-102"
-
-  call "4.4 Pricing call without premium tenant → algorithm=v1-flat" \
-    "curl -s ${GW_URL}/pricing/sku-A"
-
-  call "4.5 Pricing call with X-Tenant-Id: premium → algorithm=v2-segmented" \
-    "curl -s -H 'X-Tenant-Id: premium' ${GW_URL}/pricing/sku-A"
-
-  call "4.6 VIP user + premium tenant on pricing → tier=premium AND v2-segmented" \
-    "curl -s -H 'X-User-Id: u-vip-001' -H 'X-Tenant-Id: premium' ${GW_URL}/pricing/sku-B"
-
-  ok "scenarios passed"
+  assert_eq "$(echo "$backend_only" | jq -r '.fulfillmentMode')" "express" \
+    "premium tenant should get express fulfillment mode"
+  assert_eq "$(echo "$backend_only" | jq -r '.handler')" "express-order-pipeline" \
+    "backend-only flag should switch the order handler"
+  assert_eq "$(echo "$backend_only" | jq -r '.tier')" "standard" \
+    "backend-only scenario should remain separate from VIP tier targeting"
+  ok "backend-only flow verified"
 }
 
-step5_hot_reload() {
-  section "Step 5 — hot reload via ConfigMap edit (no service restart)"
+step5_frontend_only() {
+  section "Step 5 — frontend-only flag flow"
+  wait_ui
 
-  bold "Before: defaultVariant of new-pricing-algo = off"
-  call "anonymous /pricing/sku-X (newPricing=false)" \
-    "curl -s ${GW_URL}/pricing/sku-X"
+  local vip_banner regular_banner vip_perks regular_perks shell
+  shell=$(curl -fsS "${UI_URL}/")
+  assert_non_empty "$shell" "UI shell should be reachable"
 
-  note "patching ConfigMap: flip new-pricing-algo defaultVariant off → on"
-  show "kubectl get configmap flagd-config -o jsonpath='{.data.flags\\.json}' | jq '.flags[\"new-pricing-algo\"].defaultVariant'"
+  vip_banner=$(curl_ofrep "ui-homepage-banner" '{"context":{"targetingKey":"u-vip-001"}}')
+  regular_banner=$(curl_ofrep "ui-homepage-banner" '{"context":{"targetingKey":"u-normal-001"}}')
+  vip_perks=$(curl_ofrep "ui-member-perks" '{"context":{"targetingKey":"u-vip-001"}}')
+  regular_perks=$(curl_ofrep "ui-member-perks" '{"context":{"targetingKey":"u-normal-001"}}')
+
+  print_json "frontend-only vip banner" "$vip_banner"
+  print_json "frontend-only regular banner" "$regular_banner"
+
+  assert_eq "$(echo "$vip_banner" | jq -r '.value')" "spring-sale" \
+    "vip user should see the spring-sale banner"
+  assert_eq "$(echo "$regular_banner" | jq -r '.value')" "control" \
+    "regular user should stay on the control banner"
+  assert_eq "$(echo "$vip_perks" | jq -r '.value')" "true" \
+    "vip user should see the member perks card"
+  assert_eq "$(echo "$regular_perks" | jq -r '.value')" "false" \
+    "regular user should not see the member perks card"
+  ok "frontend-only flow verified"
+}
+
+step6_full_stack() {
+  section "Step 6 — full-stack shared flag flow"
+
+  local shared pricing order
+  shared=$(curl_json -H 'X-User-Id: u-vip-001' -H 'X-Tenant-Id: premium' \
+    "${GW_URL}/experience/shared-flags")
+  pricing=$(curl_json -H 'X-User-Id: u-vip-001' -H 'X-Tenant-Id: premium' \
+    "${GW_URL}/pricing/sku-B")
+  order=$(curl_json -H 'X-User-Id: u-vip-001' "${GW_URL}/orders/o-301")
+
+  print_json "gateway shared snapshot" "$shared"
+  print_json "pricing response for vip + premium tenant" "$pricing"
+
+  assert_eq "$(echo "$shared" | jq -r '.orderTier')" "premium" \
+    "shared snapshot should expose premium order tier"
+  assert_eq "$(echo "$shared" | jq -r '.newPricing')" "true" \
+    "shared snapshot should expose new pricing flag"
+  assert_eq "$(echo "$pricing" | jq -r '.tier')" "premium" \
+    "pricing response should match shared order tier"
+  assert_eq "$(echo "$pricing" | jq -r '.algorithm')" "v2-segmented" \
+    "pricing response should match shared pricing algorithm"
+  assert_eq "$(echo "$order" | jq -r '.tier')" "premium" \
+    "order response should preserve premium shared semantics"
+  ok "full-stack flow verified"
+}
+
+step7_hot_reload() {
+  section "Step 7 — flag hot reload"
+
+  local before after patched_json pods_before pods_after
+  before=$(curl_json "${GW_URL}/pricing/sku-X")
+  print_json "before flag hot reload" "$before"
+  assert_eq "$(echo "$before" | jq -r '.algorithm')" "v1-flat" \
+    "default pricing algorithm should start at v1-flat"
+
+  pods_before=$(kubectl get pods --no-headers | awk '{print $1 ":" $4}' | tr '\n' ' ')
 
   patched_json=$(kubectl get configmap flagd-config -o jsonpath='{.data.flags\.json}' \
     | jq '.flags["new-pricing-algo"].defaultVariant = "on"')
   kubectl create configmap flagd-config \
     --from-literal=flags.json="${patched_json}" \
-    --dry-run=client -o yaml | kubectl apply -f -
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
-  note "waiting up to 30s for kubelet to sync ConfigMap and flagd to pick it up..."
-  for i in $(seq 1 15); do
+  note "waiting for kubelet sync + flagd fsnotify"
+  for _ in $(seq 1 15); do
     sleep 2
-    body=$(curl -s "${GW_URL}/pricing/sku-X")
-    if [[ "$(echo "$body" | jq -r '.algorithm')" == "v2-segmented" ]]; then
-      ok "flag picked up after ~$((i*2))s"
+    after=$(curl_json "${GW_URL}/pricing/sku-X")
+    if [[ "$(echo "$after" | jq -r '.algorithm')" == "v2-segmented" ]]; then
       break
     fi
   done
 
-  bold "After:"
-  call "anonymous /pricing/sku-X (now newPricing=true, no restart)" \
-    "curl -s ${GW_URL}/pricing/sku-X"
+  print_json "after flag hot reload" "$after"
+  assert_eq "$(echo "$after" | jq -r '.algorithm')" "v2-segmented" \
+    "flag hot reload should flip the pricing algorithm"
 
-  note "resetting ConfigMap to original (default off) so the next run starts clean"
+  pods_after=$(kubectl get pods --no-headers | awk '{print $1 ":" $4}' | tr '\n' ' ')
+  assert_eq "$pods_after" "$pods_before" "flag hot reload must not restart pods"
+
   kubectl apply -f k8s/flagd/configmap.yaml >/dev/null
   for _ in $(seq 1 15); do
     sleep 2
-    body=$(curl -s "${GW_URL}/pricing/sku-X")
-    [[ "$(echo "$body" | jq -r '.algorithm')" == "v1-flat" ]] && break
+    after=$(curl_json "${GW_URL}/pricing/sku-X")
+    [[ "$(echo "$after" | jq -r '.algorithm')" == "v1-flat" ]] && break
   done
-
-  ok "hot-reload demonstrated (state reset for next run)"
+  ok "flag hot reload verified and reset"
 }
 
-step6_app_config_reload() {
-  section "Step 6 — application config hot-reload via @ConfigurationProperties (no pod restart)"
+step8_config_refresh() {
+  section "Step 8 — pricing config refresh"
 
-  bold "Before: pricing.discount-percent = 5, pricing.currency = USD"
-  call "GET /pricing/sku-A → discountPercent=5, currency=USD" \
-    "curl -s ${GW_URL}/pricing/sku-A"
+  local before after pod_before pod_after
+  before=$(curl_json "${GW_URL}/pricing/sku-A")
+  pod_before=$(kubectl get pods --no-headers -l app=pricing-service | awk 'NR==1{print $1}')
+  print_json "before pricing config refresh" "$before"
 
-  note "patching ConfigMap pricing-config: discount-percent 5 → 25, currency USD → CNY"
-  show "kubectl patch configmap pricing-config --type merge -p '{\"data\":{\"pricing.discount-percent\":\"25\",\"pricing.currency\":\"CNY\"}}'"
+  assert_eq "$(echo "$before" | jq -r '.discountPercent')" "5" \
+    "pricing discount should start at 5"
+  assert_eq "$(echo "$before" | jq -r '.currency')" "USD" \
+    "pricing currency should start at USD"
 
-  note "kubelet syncs ConfigMap volume (~5–10s); then we trigger /actuator/refresh"
-  note "(production: spring-cloud-kubernetes-configuration-watcher does this automatically)"
+  kubectl patch configmap pricing-config --type merge \
+    -p '{"data":{"pricing.discount-percent":"25","pricing.currency":"CNY"}}' >/dev/null
+
   for i in $(seq 1 15); do
     sleep 2
-    # Trigger refresh via an ephemeral curl pod inside the cluster (Service DNS works there).
-    kubectl run --rm -i --restart=Never --image=curlimages/curl:8.10.1 \
-      "refresh-${i}" --quiet \
-      -- -fsS -X POST -m 5 http://pricing-service:8082/actuator/refresh \
-      >/dev/null 2>&1 || true
-    body=$(curl -s "${GW_URL}/pricing/sku-A")
-    pct=$(echo "$body" | jq -r '.discountPercent')
-    cur=$(echo "$body" | jq -r '.currency')
-    if [[ "$pct" == "25" && "$cur" == "CNY" ]]; then
-      ok "config rebound after ~$((i*2))s"
+    kubectl run --rm -i --restart=Never --image=curlimages/curl:8.10.1 "refresh-${i}" --quiet \
+      -- -fsS -X POST -m 5 http://pricing-service:8082/actuator/refresh >/dev/null 2>&1 || true
+    after=$(curl_json "${GW_URL}/pricing/sku-A")
+    if [[ "$(echo "$after" | jq -r '.discountPercent')" == "25" ]]; then
       break
     fi
   done
 
-  bold "After: same pod, no restart"
-  call "GET /pricing/sku-A → discountPercent=25, currency=CNY" \
-    "curl -s ${GW_URL}/pricing/sku-A"
-  show "kubectl get pods --no-headers -l app=pricing-service"
+  pod_after=$(kubectl get pods --no-headers -l app=pricing-service | awk 'NR==1{print $1}')
+  print_json "after pricing config refresh" "$after"
 
-  note "resetting pricing-config to defaults"
+  assert_eq "$(echo "$after" | jq -r '.discountPercent')" "25" \
+    "pricing discount should rebind to 25"
+  assert_eq "$(echo "$after" | jq -r '.currency')" "CNY" \
+    "pricing currency should rebind to CNY"
+  assert_eq "$pod_after" "$pod_before" "pricing refresh should keep the same pod"
+
   kubectl apply -f k8s/pricing-service/configmap.yaml >/dev/null
   for _ in $(seq 1 15); do
     sleep 2
     kubectl run --rm -i --restart=Never --image=curlimages/curl:8.10.1 \
       "refresh-reset-$(date +%s)" --quiet \
-      -- -fsS -X POST -m 5 http://pricing-service:8082/actuator/refresh \
-      >/dev/null 2>&1 || true
-    body=$(curl -s "${GW_URL}/pricing/sku-A")
-    [[ "$(echo "$body" | jq -r '.discountPercent')" == "5" ]] && break
+      -- -fsS -X POST -m 5 http://pricing-service:8082/actuator/refresh >/dev/null 2>&1 || true
+    after=$(curl_json "${GW_URL}/pricing/sku-A")
+    [[ "$(echo "$after" | jq -r '.discountPercent')" == "5" ]] && break
   done
-
-  ok "application config hot-reload demonstrated (state reset for next run)"
-}
-
-step7_ui_and_ofrep() {
-  section "Step 7 — React UI + OpenFeature Remote Evaluation Protocol"
-
-  note "verifying UI shell is reachable on ${UI_URL}"
-  for _ in $(seq 1 15); do
-    if curl -fsS "${UI_URL}/" >/dev/null 2>&1; then break; fi
-    sleep 2
-  done
-
-  bold "UI HTML shell:"
-  show "curl -s ${UI_URL}/ | head -10"
-
-  bold "OFREP proxy through nginx (browser does the same call):"
-  show "curl -s -X POST ${UI_URL}/ofrep/v1/evaluate/flags/order-tier \
-        -H 'Content-Type: application/json' \
-        -d '{\"context\": {\"targetingKey\": \"u-vip-001\"}}' | jq"
-
-  show "curl -s -X POST ${UI_URL}/ofrep/v1/evaluate/flags/order-tier \
-        -H 'Content-Type: application/json' \
-        -d '{\"context\": {\"targetingKey\": \"u-normal-001\"}}' | jq"
-
-  bold "Same flag, evaluated server-side via gateway (REST), should match:"
-  call "VIP user via gateway → tier=premium" \
-    "curl -s -H 'X-User-Id: u-vip-001' ${GW_URL}/orders/o-7"
-
-  ok "UI served + OFREP works + same-flag-different-stack consistency proven"
-  echo
-  echo "  Open http://localhost:31180 in a browser:"
-  echo "    - switch user → flags re-evaluate live"
-  echo "    - 'Place order' / 'Get price' buttons hit the gateway through same-origin /api/*"
-  echo "    - 'New Pricing!' / 'VIP' badges flip without page reload"
+  ok "pricing config refresh verified and reset"
 }
 
 main() {
   step1_cluster
   step2_build
   step3_deploy
-  step4_scenarios
-  step5_hot_reload
-  step6_app_config_reload
-  step7_ui_and_ofrep
+  step4_backend_only
+  step5_frontend_only
+  step6_full_stack
+  step7_hot_reload
+  step8_config_refresh
   section "Done"
   echo "Cluster name: ${CLUSTER_NAME}"
   echo "Tear down:    kind delete cluster --name ${CLUSTER_NAME}"
